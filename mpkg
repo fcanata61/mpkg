@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# mpkg - Gerenciador source-based (Parte 1: Configuração)
+
+# ======= Configuração via .profile =======
+: "${MPKG_STORY:=$HOME/.mpkg/story}"          # Diretório de pacotes compilados
+: "${MPKG_PROFILE:=$HOME/.mpkg/profile}"     # Symlinks para versão ativa
+: "${MPKG_SRC:=$HOME/.mpkg/src}"             # Diretório de trabalho (build)
+: "${MPKG_LOG:=$HOME/.mpkg/log}"             # Logs de build/install
+: "${MPKG_REPO:=$HOME/.mpkg/repo}"           # Repo git para sync
+: "${MPKG_COLOR:=1}"                         # Saída colorida
+: "${MPKG_SPINNER:=1}"                       # Spinner de progresso
+: "${MPKG_FORCE:=0}"                          # Forçar rebuild
+
+# Criar diretórios se não existirem
+mkdir -p "$MPKG_STORY" "$MPKG_PROFILE/bin" "$MPKG_SRC" "$MPKG_LOG" "$MPKG_REPO"
+
+# Adicionar symlinks ativos ao PATH
+export PATH="$MPKG_PROFILE/bin:$PATH"
+# ======= Funções utilitárias =======
+color() {
+    [[ $MPKG_COLOR -eq 1 ]] || return
+    case $1 in
+        red)    echo -e "\033[31m$2\033[0m" ;;
+        green)  echo -e "\033[32m$2\033[0m" ;;
+        yellow) echo -e "\033[33m$2\033[0m" ;;
+        blue)   echo -e "\033[34m$2\033[0m" ;;
+        *) echo "$2" ;;
+    esac
+}
+
+log() {
+    local pkg="$1"; shift
+    echo "[$(date +'%H:%M:%S')] $*" | tee -a "$MPKG_LOG/$pkg.log"
+}
+
+spinner() {
+    local pid=$1
+    local i=0
+    local sp="/-\|"
+    while kill -0 $pid 2>/dev/null; do
+        i=$(( (i+1) %4 ))
+        printf "\r%s" "${sp:$i:1}"
+        sleep .1
+    done
+    printf "\r"
+}
+# ======= Download automático =======
+download_src() {
+    local url="$1"
+    local dest="$2"
+    if command -v curl >/dev/null; then
+        curl -L "$url" -o "$dest"
+    elif command -v wget >/dev/null; then
+        wget "$url" -O "$dest"
+    else
+        echo "Erro: curl ou wget necessário."
+        exit 1
+    fi
+}
+
+# ======= Descompactação automática =======
+extract_src() {
+    local file="$1"
+    local dest="$2"
+    mkdir -p "$dest"
+    case "$file" in
+        *.tar.gz|*.tgz) tar -xzf "$file" -C "$dest" ;;
+        *.tar.xz)       tar -xJf "$file" -C "$dest" ;;
+        *.tar.bz2)      tar -xjf "$file" -C "$dest" ;;
+        *.tar.zst)      tar --use-compress-program=unzstd -xf "$file" -C "$dest" ;;
+        *.zip)          unzip "$file" -d "$dest" ;;
+        *) echo "Formato desconhecido: $file"; return 1 ;;
+    esac
+}
+# ======= Resolver dependências simples =======
+resolve_deps() {
+    local pkg="$1"
+    local manifest="$MPKG_SRC/$pkg/manifest.txt"
+    [[ -f "$manifest" ]] || return
+    while read -r dep; do
+        [[ -z "$dep" ]] && continue
+        mpkg_build "$dep"
+    done < "$manifest"
+}
+# ======= Build do pacote =======
+mpkg_build() {
+    local pkg="$1"
+    local src_dir="$MPKG_SRC/$pkg"
+    [[ $MPKG_FORCE -eq 0 && -d "$MPKG_STORY/$pkg" ]] && {
+        color yellow "$pkg já construído, pulando build"
+        return
+    }
+
+    mkdir -p "$src_dir"
+    cd "$src_dir" || exit
+
+    log "$pkg" "Iniciando build..."
+    resolve_deps "$pkg"
+
+    # TODO: Download real e descompactação
+    # download_src "URL_DO_PACOTE" "$src_dir/arquivo.tar.gz"
+    # extract_src "$src_dir/arquivo.tar.gz" "$src_dir"
+
+    # Aplicar patches se existirem
+    for patch in "$src_dir"/*.patch; do
+        [[ -f "$patch" ]] && patch -p1 < "$patch"
+    done
+
+    # Build simulado
+    sleep 1
+    mkdir -p "$src_dir/bin" "$src_dir/lib"
+    touch "$src_dir/bin/$pkg"
+    log "$pkg" "Build concluído"
+}
+# ======= Instalação do pacote =======
+mpkg_install() {
+    local pkg="$1"
+    local story_dir="$MPKG_STORY/$pkg"
+
+    mpkg_build "$pkg"
+
+    mkdir -p "$story_dir/bin" "$story_dir/lib"
+    cp -r "$MPKG_SRC/$pkg/bin/"* "$story_dir/bin/"
+    cp -r "$MPKG_SRC/$pkg/lib/"* "$story_dir/lib/"
+
+    ln -sf "$story_dir/bin/$pkg" "$MPKG_PROFILE/bin/$pkg"
+    log "$pkg" "Pacote instalado e symlink criado"
+}
+# ======= Recompilação do sistema =======
+mpkg_rebuild_all() {
+    for pkg_dir in "$MPKG_STORY"/*; do
+        pkg=$(basename "$pkg_dir")
+        color blue "Reconstruindo $pkg..."
+        mpkg_build "$pkg"
+        mpkg_install "$pkg"
+    done
+}
+# ======= Remoção =======
+mpkg_remove() {
+    local pkg="$1"
+    local unlink_only="$2"
+
+    if [[ "$unlink_only" == "unlink" ]]; then
+        rm -f "$MPKG_PROFILE/bin/$pkg"
+        log "$pkg" "Symlink removido"
+    else
+        rm -rf "$MPKG_STORY/$pkg"
+        rm -f "$MPKG_PROFILE/bin/$pkg"
+        log "$pkg" "Pacote completamente removido"
+    fi
+}
+# ======= Download real (curl, wget ou git) =======
+mpkg_fetch() {
+    local url="$1"
+    local dest="$2"
+    if [[ "$url" =~ ^git ]]; then
+        git clone "$url" "$dest"
+    elif command -v curl >/dev/null; then
+        curl -L "$url" -o "$dest"
+    elif command -v wget >/dev/null; then
+        wget "$url" -O "$dest"
+    else
+        echo "Erro: curl, wget ou git necessário."
+        exit 1
+    fi
+}
+
+# ======= Empacotamento =======
+mpkg_pack() {
+    local pkg="$1"
+    local dest="$MPKG_REPO/$pkg.tar.gz"
+    tar -czf "$dest" -C "$MPKG_STORY/$pkg" .
+    log "$pkg" "Pacote empacotado em $dest"
+}
+
+# ======= Strip binários =======
+mpkg_strip() {
+    local pkg="$1"
+    if command -v strip >/dev/null; then
+        find "$MPKG_STORY/$pkg/bin" -type f -exec strip {} \;
+        log "$pkg" "Binários strip aplicados"
+    fi
+}
+
+# ======= Build com destdir / fakeroot =======
+mpkg_build_destdir() {
+    local pkg="$1"
+    local destdir="$MPKG_SRC/$pkg/destdir"
+    mkdir -p "$destdir"
+    # Simulação de fakeroot
+    log "$pkg" "Build no destdir: $destdir"
+    mpkg_build "$pkg"
+}
+# ======= Upgrade =======
+mpkg_upgrade() {
+    local pkg="$1"
+    if [[ "$pkg" == "all" ]]; then
+        for p in "$MPKG_STORY"/*; do
+            mpkg_build "$(basename "$p")"
+            mpkg_install "$(basename "$p")"
+        done
+    else
+        mpkg_build "$pkg"
+        mpkg_install "$pkg"
+    fi
+    log "$pkg" "Upgrade concluído"
+}
+
+# ======= Remoção de órfãos =======
+mpkg_remove_orphans() {
+    # Lista todos os pacotes no story e checa se estão ligados em algum symlink
+    for pkg_dir in "$MPKG_STORY"/*; do
+        pkg=$(basename "$pkg_dir")
+        if [[ ! -f "$MPKG_PROFILE/bin/$pkg" ]]; then
+            rm -rf "$MPKG_STORY/$pkg"
+            log "$pkg" "Pacote órfão removido"
+        fi
+    done
+}
+
+# ======= Sync com git repo =======
+mpkg_sync() {
+    cd "$MPKG_REPO" || return
+    git add .
+    git commit -m "Sync $(date +'%Y-%m-%d %H:%M:%S')"
+    git push origin main
+    log "Repositório sincronizado"
+}
+# ======= Help completo =======
+mpkg_help() {
+    cat <<EOF
+mpkg 2.0 - Gerenciador source-based completo
+
+Comandos principais:
+  build <pacote>            Compila pacote sem instalar
+  install <pacote>          Instala pacote (symlink)
+  remove <pacote>           Remove pacote (use 'unlink' para só symlink)
+  rebuild                   Recompila todos os pacotes e atualiza symlinks
+  upgrade <pacote|all>      Atualiza pacote(s)
+  strip <pacote>            Aplica strip nos binários
+  pack <pacote>             Empacota pacote em tar.gz no repo
+  destdir <pacote>          Build em destdir/fakeroot
+  orphans                   Remove pacotes órfãos
+  sync                      Sincroniza diretório com git repo
+  help                      Mostra este help
+
+Atalhos sugeridos:
+  b <pacote>     -> build
+  i <pacote>     -> install
+  r <pacote>     -> remove
+  rb             -> rebuild
+  u <pacote|all> -> upgrade
+  s <pacote>     -> strip
+  p <pacote>     -> pack
+  d <pacote>     -> destdir
+  o              -> orphans
+  y              -> sync
+
+Templates de pacote:
+  Cada pacote deve ter um diretório em $MPKG_SRC/<pacote>
+  com os arquivos:
+    - manifest.txt : lista de dependências
+    - patches/     : arquivos *.patch
+    - URL.txt      : URL de download
+    - build.sh     : script de build específico (opcional)
+EOF
+}
+
+# ======= Atalhos =======
+case "$1" in
+    b) shift; mpkg_build "$@" ;;
+    i) shift; mpkg_install "$@" ;;
+    r) shift; mpkg_remove "$@" ;;
+    rb) mpkg_rebuild_all ;;
+    u) shift; mpkg_upgrade "$@" ;;
+    s) shift; mpkg_strip "$@" ;;
+    p) shift; mpkg_pack "$@" ;;
+    d) shift; mpkg_build_destdir "$@" ;;
+    o) mpkg_remove_orphans ;;
+    y) mpkg_sync ;;
+    help|--help) mpkg_help ;;
+    *) echo "Comando inválido. Use 'mpkg help'." ;;
+esac
