@@ -95,6 +95,35 @@ $MPKG_SRC/gcc-12.2.0/
 ├─ patches/            # Arquivos de patch opcionais
 ├─ URL.txt             # URL para download da fonte
 └─ build.sh            # Script de build específico (opcional)
+# Exemplo de build
+#!/usr/bin/env bash
+# Build script para GCC 12.2.0 no MPKG
+--------------‐-------------
+set -e
+
+PKG_SRC_DIR=$(pwd)
+BUILD_DIR="$PKG_SRC_DIR/build"
+INSTALL_DIR="$MPKG_STORY/gcc-12.2.0"
+
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+# Configuração
+"$PKG_SRC_DIR/configure" \
+    --prefix="$INSTALL_DIR" \
+    --enable-languages=c,c++ \
+    --disable-multilib \
+    --disable-bootstrap \
+    --with-system-zlib
+
+# Compilação
+make -j$(nproc)
+
+# Instalação local no story
+make install
+
+echo "GCC 12.2.0 compilado e instalado em $INSTALL_DIR"
+------------------------
 
 Para instalar:
 mpkgb gcc-12.2.0    # Build
