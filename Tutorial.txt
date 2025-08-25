@@ -1,0 +1,134 @@
+=========================================================
+MPKG – Gerenciador Source-Based Linux em Bash
+=========================================================
+
+1. Visão Geral
+--------------
+MPKG é um gerenciador de pacotes source-based escrito em Bash, inspirado em Nix/Guix. Ele permite:
+- Compilar pacotes a partir do código-fonte
+- Resolver dependências automaticamente
+- Manter múltiplas versões de pacotes
+- Criar symlinks de versão ativa
+- Recompilar o sistema completo
+- Empacotar pacotes, aplicar strip, usar destdir/fakeroot
+- Sincronizar com git
+- Criar toolchains customizados
+
+2. Estrutura de Diretórios
+--------------------------
+Diretórios principais usados pelo MPKG:
+
+$HOME/.mpkg/
+├─ src/           # Código-fonte baixado e descompactado
+│   ├─ gcc-12.2.0/
+│   │   ├─ bin/
+│   │   ├─ lib/
+│   │   └─ include/
+│   └─ pacoteX/
+├─ story/         # Pacotes compilados (versões isoladas)
+│   ├─ gcc-12.2.0/
+│   │   ├─ bin/
+│   │   ├─ lib/
+│   │   └─ include/
+│   └─ pacoteX/
+├─ profile/       # Symlinks para a versão ativa
+│   ├─ bin/programa -> ../story/pacoteX/bin/programa
+│   └─ lib/
+├─ log/           # Logs de build e instalação
+├─ repo/          # Repositório git para sync
+└─ toolchain/     # Toolchains customizados
+
+3. Configuração do .profile
+---------------------------
+Adicionar o seguinte ao seu ~/.profile:
+
+export MPKG_STORY="$HOME/.mpkg/story"
+export MPKG_PROFILE="$HOME/.mpkg/profile"
+export MPKG_SRC="$HOME/.mpkg/src"
+export MPKG_LOG="$HOME/.mpkg/log"
+export MPKG_REPO="$HOME/.mpkg/repo"
+export MPKG_COLOR=1
+export MPKG_SPINNER=1
+export MPKG_FORCE=0
+
+mkdir -p "$MPKG_STORY" "$MPKG_PROFILE/bin" "$MPKG_SRC" "$MPKG_LOG" "$MPKG_REPO"
+export PATH="$MPKG_PROFILE/bin:$PATH"
+export LD_LIBRARY_PATH="$MPKG_PROFILE/lib:$LD_LIBRARY_PATH"
+
+# Funções auxiliares
+mpkg_color() { [[ $MPKG_COLOR -eq 1 ]] || return; case $1 in red) echo -e "\033[31m$2\033[0m"; green) echo -e "\033[32m$2\033[0m"; yellow) echo -e "\033[33m$2\033[0m"; blue) echo -e "\033[34m$2\033[0m"; *) echo "$2"; esac; }
+mpkg_spinner() { local pid=$1 i=0 sp="/-\|"; while kill -0 $pid 2>/dev/null; do i=$(( (i+1) %4 )); printf "\r%s" "${sp:$i:1}"; sleep .1; done; printf "\r"; }
+
+# Aliases
+alias mpkgb='mpkg build'
+alias mpkgi='mpkg install'
+alias mpkgr='mpkg remove'
+alias mpkgrb='mpkg rebuild'
+alias mpkgu='mpkg upgrade'
+alias mpkgs='mpkg strip'
+alias mpkgp='mpkg pack'
+alias mpkgd='mpkg destdir'
+alias mpkgo='mpkg orphans'
+alias mpkgy='mpkg sync'
+alias mpkgh='mpkg help'
+
+4. Comandos Suportados
+----------------------
+- build <pacote>       : Compila pacote sem instalar
+- install <pacote>     : Instala pacote (symlink)
+- remove <pacote>      : Remove pacote ou symlink
+- rebuild              : Recompila todos os pacotes e atualiza symlinks
+- upgrade <pacote|all> : Atualiza pacote(s)
+- strip <pacote>       : Aplica strip em binários
+- pack <pacote>        : Empacota pacote em tar.gz
+- destdir <pacote>     : Build em destdir/fakeroot
+- orphans              : Remove pacotes órfãos
+- sync                 : Sincroniza diretório com git repo
+- help                 : Exibe help completo
+
+5. Receita de GCC
+-----------------
+Exemplo de diretório de pacote para gcc-12.2.0:
+
+$MPKG_SRC/gcc-12.2.0/
+├─ manifest.txt        # Lista de dependências, ex: gmp, mpfr, mpc
+├─ patches/            # Arquivos de patch opcionais
+├─ URL.txt             # URL para download da fonte
+└─ build.sh            # Script de build específico (opcional)
+
+Para instalar:
+mpkgb gcc-12.2.0    # Build
+mpkgi gcc-12.2.0    # Install (symlink)
+mpkgs gcc-12.2.0    # Strip (opcional)
+mpkgp gcc-12.2.0    # Empacotar
+
+6. Uso do Toolchain
+-------------------
+- Criar toolchain customizado:
+mpkg toolchain <nome>
+- Todos os pacotes compilados com esse toolchain usarão paths e libs isoladas.
+- Ativar toolchain atualiza symlinks em $MPKG_PROFILE/bin e lib.
+
+7. Dicas de Uso
+---------------
+- Para recompilar todo o sistema (ex.: após atualizar gcc):
+mpkgrb
+- Para atualizar um pacote e suas dependências:
+mpkgu <pacote>
+- Para remover pacotes órfãos:
+mpkgo
+- Para sincronizar com git:
+mpkgy
+
+8. Observações
+--------------
+- Cada pacote fica isolado em story, permitindo múltiplas versões.
+- Symlinks em profile definem a versão ativa do usuário.
+- Logs detalhados ficam em $MPKG_LOG/<pacote>.log
+- Dependências são resolvidas em ordem topológica.
+- Patches aplicados automaticamente se estiverem no diretório patches.
+- Build em destdir/fakeroot permite testar instalação sem afetar sistema.
+
+=========================================================
+Fim do Tutorial MPKG
+=========================================================
